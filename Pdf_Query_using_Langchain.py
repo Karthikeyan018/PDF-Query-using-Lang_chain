@@ -1,40 +1,102 @@
+import streamlit as st
 from PyPDF2 import PdfReader
-from langchain.embeddings.openai import OpenAIEmbeddings
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import FAISS
-
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-os.environ["OPENAI_API_KEY"] = ""
-os.environ["SERPAPI_API_KEY"] = ""
-
-# provide the path of  pdf file/files.
-pdfreader = PdfReader('budget_speech.pdf')
-from typing_extensions import Concatenate
-# read text from pdf
-raw_text = ''
-for i, page in enumerate(pdfreader.pages):
-    content = page.extract_text()
-    if content:
-        raw_text += content
-# We need to split the text using Character Text Split such that it sshould not increse token size
-text_splitter = CharacterTextSplitter(
-    separator = "\n",
-    chunk_size = 800,
-    chunk_overlap  = 200,
-    length_function = len,
-)
-texts = text_splitter.split_text(raw_text)
-
-# Download embeddings from OpenAI
-embeddings = OpenAIEmbeddings()
-
-document_search = FAISS.from_texts(texts, embeddings)
-
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+import google.generativeai as genai
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
-from langchain.llms import OpenAI
+from langchain.prompts import PromptTemplate
+from dotenv import load_dotenv
 
-chain = load_qa_chain(OpenAI(), chain_type="stuff")
+# Load environment variables
+load_dotenv()
+api_key = os.getenv("GOOGLE_API_KEY")
+if not api_key:
+    st.error("GOOGLE_API_KEY not found in environment variables")
+else:
+    genai.configure(api_key=api_key)
 
-query = "Vision for Amrit Kaal"
-docs = document_search.similarity_search(query)
-chain.run(input_documents=docs, question=query)
+def get_pdf_text(pdf_docs):
+    text = ""
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text
+    return text
+
+def get_text_chunks(text):
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    chunks = text_splitter.split_text(text)
+    return chunks
+
+def get_vector_store(text_chunks):
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
+    vector_store.save_local("faiss_index")
+
+def get_conversational_chain():
+    prompt_template = """
+    Answer the question as detailed as possible from the provided context. If the answer is not available in the context, just say, "answer is not available in the context".
+    Context: {context}
+    Question: {question}
+    
+    Answer:
+    """
+    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
+    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
+    return chain
+
+def user_input(user_question):
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    try:
+        # Allow dangerous deserialization as we trust the source of the data
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+    except Exception as e:
+        st.error(f"Error loading FAISS index: {e}")
+        return
+    
+    try:
+        docs = new_db.similarity_search(user_question)
+    except Exception as e:
+        st.error(f"Error during similarity search: {e}")
+        return
+    
+    chain = get_conversational_chain()
+    
+    try:
+        response = chain(
+            {"input_documents": docs, "question": user_question},
+            return_only_outputs=True
+        )
+        print(response)
+        st.write("Reply:", response["output_text"])
+    except Exception as e:
+        st.error(f"Error during chain execution: {e}")
+
+def main():
+    st.set_page_config(page_title="Chat with PDF using Gemini")
+    st.header("Chat with PDF using Gemini")
+    user_question = st.text_input("Ask a Question from the PDF files")
+    
+    if user_question:
+        user_input(user_question)
+    
+    with st.sidebar:
+        st.title("Menu")
+        pdf_docs = st.file_uploader("Upload PDF files", accept_multiple_files=True)
+        if st.button("Submit & Process"):
+            with st.spinner("Processing..."):
+                raw_text = get_pdf_text(pdf_docs)
+                if not raw_text:
+                    st.error("No text extracted from PDF files.")
+                    return
+                text_chunks = get_text_chunks(raw_text)
+                get_vector_store(text_chunks)
+                st.success("Processing complete.")
+if __name__ == "__main__":
+    main()
