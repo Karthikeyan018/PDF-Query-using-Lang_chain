@@ -10,6 +10,30 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 
+# Set the page configuration at the start
+st.set_page_config(page_title="Chat with PDF using Gemini")
+
+# Add CSS for the background image
+page_bg_img = '''
+<style>
+[data-testid="stAppViewContainer"] {
+background-image: url("https://cdn.pixabay.com/photo/2016/11/29/06/15/plans-1867745_960_720.jpg");
+background-size: cover;
+background-position: center;
+background-repeat: no-repeat;
+}
+
+[data-testid="stSidebar"] {
+background-image: url("https://cdn.pixabay.com/photo/2015/01/21/14/14/imac-606765_960_720.jpg");
+background-size: cover;
+background-position: center;
+background-repeat: no-repeat;
+}
+</style>
+'''
+
+st.markdown(page_bg_img, unsafe_allow_html=True)
+
 # Load environment variables
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
@@ -73,13 +97,12 @@ def user_input(user_question):
             {"input_documents": docs, "question": user_question},
             return_only_outputs=True
         )
-        print(response)
-        st.write("Reply:", response["output_text"])
+        # Highlight the reply
+        st.markdown(f"<div style='background-color: #f0f0f0; padding: 10px; border-radius: 5px;'><strong>Reply:</strong> {response['output_text']}</div>", unsafe_allow_html=True)
     except Exception as e:
         st.error(f"Error during chain execution: {e}")
 
 def main():
-    st.set_page_config(page_title="Chat with PDF using Gemini")
     st.header("Chat with PDF using Gemini")
     user_question = st.text_input("Ask a Question from the PDF files")
     
@@ -98,5 +121,6 @@ def main():
                 text_chunks = get_text_chunks(raw_text)
                 get_vector_store(text_chunks)
                 st.success("Processing complete.")
+
 if __name__ == "__main__":
     main()
